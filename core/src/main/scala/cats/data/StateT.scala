@@ -180,6 +180,11 @@ private[data] sealed trait StateTInstances2 {
 
   implicit def catsDataSemigroupKForStateT[F[_], S](implicit F0: Monad[F], G0: SemigroupK[F]): SemigroupK[StateT[F, S, ?]] =
     new StateTSemigroupK[F, S] { implicit def F = F0; implicit def G = G0 }
+
+  implicit def catsDataMonadErrorForStateT[F[_], S, E](implicit F0: MonadError[F, E]): MonadError[StateT[F, S, ?], E] = new StateTMonadError[F, S, E] {
+    implicit def F = F0
+    implicit def G = F0
+  }
 }
 
 // To workaround SI-7139 `object State` needs to be defined inside the package object
@@ -257,4 +262,13 @@ private[data] sealed trait StateTMonadCombine[F[_], S] extends MonadCombine[Stat
   override def G: MonadCombine[F] = F
 
   def empty[A]: StateT[F, S, A] = liftT[F, A](F.empty[A])
+}
+
+private[data] trait StateTMonadError[F[_], S, E] extends MonadError[StateT[F, S, ?], E] with StateTMonad[F, S] {
+  implicit def G: MonadError[F, E]
+
+  def handleErrorWith[A](fa: StateT[F, S, A])(f: E => StateT[F, S, A]): StateT[F, S, A] = StateT { s =>
+    G.handleErrorWith(fa.run(s))(e => f(e).run(s))
+  }
+  def raiseError[A](e: E): StateT[F, S, A] = StateT.lift(G.raiseError(e))
 }
