@@ -12,76 +12,73 @@ Response comes back saying your username can't have dashes in it, so you make so
 have special characters either. Change, resubmit. Passwords need to have at least one capital letter. Change,
 resubmit. Password needs to have at least one number.
 
-Or perhaps you're reading from a configuration file. One could imagine the configuration library you're using returns
-a `scala.util.Try`, or maybe a `scala.util.Either`. Your parsing may look something like:
+The code validating the form might look something like this:
 
-```scala
+```tut:book
+
+case class Form(username: String, password: String)
+
+sealed trait ValidationFailure
+case class DashesPresent(text: String) extends ValidationFailure
+case class NoCapitals(text: String) extends ValidationFailure
+case class NoNumbers(text: String) extends ValidationFailure
+
+def validateForm(form: Form): Either[ValidationFailure, Form] =
 for {
-  url  <- config[String]("url")
-  port <- config[Int]("port")
-} yield ConnectionParams(url, port)
+  _ <- checkNoDashes(form.username)
+  _ <- checkAtLeastOneCapital(form.password)
+  _ <- checkAtLeastOneNumber(form.password)
+  } yield form
+  
+def checkNoDashes(s: String): Either[ValidationFailure, String] = if(s.contains("-") Either.left(DashesPresent(s)) else Either.right(s)
+def checkAtLeastOneCapital(s: String): Either[ValidationFailure, String] = Either.fromOption([A-Z]+".r.findFirstIn(s), NoCapitals(s))
+def checkAtLeastOneNumber(s: String): Either[ValidationFailure, String] = Either.fromOption([0-9]+".r.findFirstIn(s), NoNumbers(s))
+
 ```
 
-You run your program and it says key "url" not found, turns out the key was "endpoint". So you change your code
-and re-run. Now it says the "port" key was not a well-formed integer.
-
-It would be nice to have all of these errors be reported simultaneously. That the username can't have dashes can
-be validated separately from it not having special characters, as well as from the password needing to have certain
-requirements. A misspelled (or missing) field in a config can be validated separately from another field not being
-well-formed.
+The code may be clean and functional, but someone using it could get frustrated by having to resubmit the form, only to discover that validation failed at a later stage.
+It would be much nicer to have all of these errors reported simultaneously, on the first form submission.
 
 Enter `Validated`.
 
 ## Parallel validation
-Our goal is to report any and all errors across independent bits of data. For instance, when we ask for several
-pieces of configuration, each configuration field can be validated separately from one another. How then do we
-enforce that the data we are working with is independent? We ask for both of them up front.
 
-As our running example, we will look at config parsing. Our config will be represented by a
-`Map[String, String]`. Parsing will be handled by a `Read` type class - we provide instances
-just for `String` and `Int` for brevity.
+The `Validated` data type is used to collect errors, such that they can be reported all at once.
+It can be used in a similar way to `Either`, but has a few key differences:
+`Either` has a *Monad* instance, so it can execute dependent checks sequentially, and terminates on encountering an error
+`Validated` has an *Applicative* instance, so can execute independent checks and collects all errors
 
-```tut:silent
-trait Read[A] {
-  def read(s: String): Option[A]
-}
+Just as `Either` can be a `Left` or a `Right`, `Validated` can be `Invalid` or `Valid`.
 
-object Read {
-  def apply[A](implicit A: Read[A]): Read[A] = A
+Our checks can be executed independently of each other, so we can use a `Validated`.
 
-  implicit val stringRead: Read[String] =
-    new Read[String] { def read(s: String): Option[String] = Some(s) }
+Let's first write our checks in terms of `Valid` and `Invalid`:
 
-  implicit val intRead: Read[Int] =
-    new Read[Int] {
-      def read(s: String): Option[Int] =
-        if (s.matches("-?[0-9]+")) Some(s.toInt)
-        else None
-    }
-}
+```tut:book
+def checkNoDashes(s: String): Either[ValidationFailure, String] = if(s.contains("-") DashesPresent(s).invalidNel else s.valid
+def checkAtLeastOneCapital(s: String): Either[ValidationFailure, String] = Validated.fromOption([A-Z]+".r.findFirstIn(s), NoCapitals(s))
+def checkAtLeastOneNumber(s: String): Either[ValidationFailure, String] = Validated.fromOption([0-9]+".r.findFirstIn(s), NoNumbers(s))
 ```
 
-Then we enumerate our errors - when asking for a config value, one of two things can
-go wrong: the field is missing, or it is not well-formed with regards to the expected
-type.
+Notice that we've used a method called `invalidNel`.  This creates a non-empty list on the left.
+So our validated instance can actually store a list of errors instead of a single one.
 
-```tut:silent
-sealed abstract class ConfigError
-final case class MissingConfig(field: String) extends ConfigError
-final case class ParseError(field: String) extends ConfigError
-```
+We can now validate the form at once:
+```tut:book
 
-We need a data type that can represent either a successful value (a parsed configuration),
-or an error.
-
-```scala
-sealed abstract class Validated[+E, +A]
-
-object Validated {
-  final case class Valid[+A](a: A) extends Validated[Nothing, A]
-  final case class Invalid[+E](e: E) extends Validated[E, Nothing]
+def validateForm(form: Form): Either[ValidationFailure, Form] = 
+((checkNoDashes(form.username)), checkAtLeastOneCapital(form.password), checkAtLeastOneCapital(form.password)).map3 {
+  case (username, password, password) => form
 }
 ```
+
+Let's try submitting a form again:
+
+We can now see everything that's failed.
+
+## How does this work?
+
+
 
 Now we are ready to write our parser.
 
